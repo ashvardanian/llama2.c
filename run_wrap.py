@@ -17,12 +17,12 @@ enc = Tokenizer()
 
 t0 = time.time()
 tokens = []
-last = ''
+last = ""
 for line in proc.stdout:
-    token = int(line.decode('utf-8').strip())
+    token = int(line.decode("utf-8").strip())
     dec = enc.decode(tokens + [token])
-    chunk = dec[len(last):]
-    print(chunk, end='',flush=True)
+    chunk = dec[len(last) :]
+    print(chunk, end="", flush=True)
     tokens.append(token)
     last = dec
 t1 = time.time()

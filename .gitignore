@@ -1,0 +1,4 @@
+out
+run
+*.dSYM
+__pycache__

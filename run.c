@@ -10,64 +10,65 @@ Then run with:
 $ ./run
 */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include <math.h>
 
 // ----------------------------------------------------------------------------
 // Transformer and RunState structs, and related memory management
 
 typedef struct {
-    int dim; // transformer dimension
+    int dim;        // transformer dimension
     int hidden_dim; // for ffn layers
-    int n_layers; // number of layers
-    int n_heads; // number of query heads
-    int n_kv_heads; // number of key/value heads (can be < query heads because of multiquery)
+    int n_layers;   // number of layers
+    int n_heads;    // number of query heads
+    int n_kv_heads; // number of key/value heads (can be < query heads because
+                    // of multiquery)
     int vocab_size; // vocabulary size, usually 256 (byte-level)
-    int seq_len; // max sequence length
+    int seq_len;    // max sequence length
 } Config;
 
 typedef struct {
     // token embedding table
-    float* token_embedding_table;    // (vocab_size, dim)
+    float *token_embedding_table; // (vocab_size, dim)
     // weights for rmsnorms
-    float* rms_att_weight; // (layer, dim) rmsnorm weights
-    float* rms_ffn_weight; // (layer, dim)
+    float *rms_att_weight; // (layer, dim) rmsnorm weights
+    float *rms_ffn_weight; // (layer, dim)
     // weights for matmuls
-    float* wq; // (layer, dim, dim)
-    float* wk; // (layer, dim, dim)
-    float* wv; // (layer, dim, dim)
-    float* wo; // (layer, dim, dim)
+    float *wq; // (layer, dim, dim)
+    float *wk; // (layer, dim, dim)
+    float *wv; // (layer, dim, dim)
+    float *wo; // (layer, dim, dim)
     // weights for ffn
-    float* w1; // (layer, hidden_dim, dim)
-    float* w2; // (layer, dim, hidden_dim)
-    float* w3; // (layer, hidden_dim, dim)
+    float *w1; // (layer, hidden_dim, dim)
+    float *w2; // (layer, dim, hidden_dim)
+    float *w3; // (layer, hidden_dim, dim)
     // final rmsnorm
-    float* rms_final_weight; // (dim,)
+    float *rms_final_weight; // (dim,)
     // freq_cis for RoPE relatively positional embeddings
-    float* freq_cis_real; // (seq_len, dim/2)
-    float* freq_cis_imag; // (seq_len, dim/2)
+    float *freq_cis_real; // (seq_len, dim/2)
+    float *freq_cis_imag; // (seq_len, dim/2)
 } TransformerWeights;
 
 typedef struct {
     // current wave of activations
-    float *x; // activation at current time stamp (dim,)
-    float *xb; // same, but inside a residual branch (dim,)
-    float *xb2; // an additional buffer just for convenience (dim,)
-    float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *q; // query (dim,)
-    float *k; // key (dim,)
-    float *v; // value (dim,)
-    float *att; // buffer for scores/attention values (seq_len,)
+    float *x;      // activation at current time stamp (dim,)
+    float *xb;     // same, but inside a residual branch (dim,)
+    float *xb2;    // an additional buffer just for convenience (dim,)
+    float *hb;     // buffer for hidden dimension in the ffn (hidden_dim,)
+    float *hb2;    // buffer for hidden dimension in the ffn (hidden_dim,)
+    float *q;      // query (dim,)
+    float *k;      // key (dim,)
+    float *v;      // value (dim,)
+    float *att;    // buffer for scores/attention values (seq_len,)
     float *logits; // output logits
     // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
+    float *key_cache;   // (layer, seq_len, dim)
+    float *value_cache; // (layer, seq_len, dim)
 } RunState;
 
-void malloc_run_state(RunState* s, Config* p) {
+void malloc_run_state(RunState *s, Config *p) {
     // we calloc instead of malloc to keep valgrind happy
     s->x = calloc(p->dim, sizeof(float));
     s->xb = calloc(p->dim, sizeof(float));
@@ -82,15 +83,14 @@ void malloc_run_state(RunState* s, Config* p) {
     s->key_cache = calloc(p->n_layers * p->seq_len * p->dim, sizeof(float));
     s->value_cache = calloc(p->n_layers * p->seq_len * p->dim, sizeof(float));
     // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q 
-     || !s->k || !s->v || !s->att || !s->logits || !s->key_cache 
-     || !s->value_cache) {
+    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q || !s->k ||
+        !s->v || !s->att || !s->logits || !s->key_cache || !s->value_cache) {
         printf("malloc failed!\n");
         exit(1);
     }
 }
 
-void free_run_state(RunState* s, Config* p) {
+void free_run_state(RunState *s, Config *p) {
     free(s->x);
     free(s->xb);
     free(s->xb2);
@@ -105,7 +105,7 @@ void free_run_state(RunState* s, Config* p) {
     free(s->value_cache);
 }
 
-void malloc_weights(TransformerWeights* w, Config* p) {
+void malloc_weights(TransformerWeights *w, Config *p) {
     // we calloc instead of malloc to keep valgrind happy
     w->token_embedding_table = calloc(p->vocab_size * p->dim, sizeof(float));
     w->rms_att_weight = calloc(p->n_layers * p->dim, sizeof(float));
@@ -121,15 +121,15 @@ void malloc_weights(TransformerWeights* w, Config* p) {
     w->freq_cis_real = calloc(p->seq_len * p->dim / 2, sizeof(float));
     w->freq_cis_imag = calloc(p->seq_len * p->dim / 2, sizeof(float));
     // ensure all mallocs went fine
-    if (!w->token_embedding_table || !w->rms_att_weight || !w->rms_ffn_weight 
-     || !w->wq || !w->wk || !w->wv || !w->wo || !w->w1 || !w->w2 || !w->w3 || 
+    if (!w->token_embedding_table || !w->rms_att_weight || !w->rms_ffn_weight ||
+        !w->wq || !w->wk || !w->wv || !w->wo || !w->w1 || !w->w2 || !w->w3 ||
         !w->rms_final_weight || !w->freq_cis_real || !w->freq_cis_imag) {
         printf("malloc failed!\n");
         exit(1);
     }
 }
 
-void free_weights(TransformerWeights* w, Config* p) {
+void free_weights(TransformerWeights *w, Config *p) {
     free(w->token_embedding_table);
     free(w->rms_att_weight);
     free(w->rms_ffn_weight);
@@ -148,7 +148,7 @@ void free_weights(TransformerWeights* w, Config* p) {
 // ----------------------------------------------------------------------------
 // initialization: random init, or read from checkpoint
 
-void checkpoint_init_weights(TransformerWeights *w, Config* p, FILE* f) {
+void checkpoint_init_weights(TransformerWeights *w, Config *p, FILE *f) {
     fread(w->token_embedding_table, sizeof(float), p->vocab_size * p->dim, f);
     fread(w->rms_att_weight, sizeof(float), p->n_layers * p->dim, f);
     fread(w->wq, sizeof(float), p->n_layers * p->dim * p->dim, f);
@@ -169,20 +169,23 @@ void checkpoint_init_weights(TransformerWeights *w, Config* p, FILE* f) {
 // neural net blocks
 
 void copy(float *a, float *b, int size) {
+#pragma omp simd
     for (int i = 0; i < size; i++) {
         a[i] = b[i];
     }
 }
 
 void accum(float *a, float *b, int size) {
+#pragma omp simd
     for (int i = 0; i < size; i++) {
         a[i] += b[i];
     }
 }
 
-void rmsnorm(float* o, float* x, float* weight, int size) {
+void rmsnorm(float *o, float *x, float *weight, int size) {
     // calculate sum of squares
     float ss = 0.0f;
+#pragma omp simd
     for (int j = 0; j < size; j++) {
         ss += x[j] * x[j];
     }
@@ -190,38 +193,43 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
     ss += 1e-5f;
     ss = 1.0f / sqrt(ss);
     // normalize and scale
+#pragma omp simd
     for (int j = 0; j < size; j++) {
         o[j] = weight[j] * (ss * x[j]);
     }
 }
 
-void softmax(float* x, int size) {
-    if(size == 1) {
+void softmax(float *x, int size) {
+    if (size == 1) {
         x[0] = 1.0f;
         return;
     }
     // find max value (for numerical stability)
     float max_val = x[0];
+#pragma omp simd
     for (int i = 1; i < size; i++) {
         if (x[i] > max_val) {
             max_val = x[i];
         }
     }
     // e^x
+#pragma omp simd
     for (int i = 0; i < size; i++) {
         x[i] = exp(x[i] - max_val);
     }
     // normalize
     float sum = 0.0f;
+#pragma omp simd
     for (int i = 0; i < size; i++) {
         sum += x[i];
     }
+#pragma omp simd
     for (int i = 0; i < size; i++) {
         x[i] /= sum;
     }
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
+void matmul(float *xout, float *x, float *w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     for (int i = 0; i < d; i++) {
         float val = 0.0f;
@@ -232,68 +240,70 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     }
 }
 
-void transformer(int token, int pos, Config* p, RunState* s, TransformerWeights* w) {
-    
+void transformer(int token, int pos, Config *p, RunState *s,
+                 TransformerWeights *w) {
+
     // a few convenice variables
     float *x = s->x;
     int dim = p->dim;
-    int hidden_dim =  p->hidden_dim;
+    int hidden_dim = p->hidden_dim;
     int head_size = dim / p->n_heads;
 
     // copy the token embedding into x
-    float* content_row = &(w->token_embedding_table[token * dim]);
+    float *content_row = &(w->token_embedding_table[token * dim]);
     copy(x, content_row, dim);
 
     // pluck out the "pos" row of freq_cis_real and freq_cis_imag
-    float* freq_cis_real_row = w->freq_cis_real + pos * head_size / 2;
-    float* freq_cis_imag_row = w->freq_cis_imag + pos * head_size / 2;
+    float *freq_cis_real_row = w->freq_cis_real + pos * head_size / 2;
+    float *freq_cis_imag_row = w->freq_cis_imag + pos * head_size / 2;
 
     // forward all the layers
-    for(int l = 0; l < p->n_layers; l++) {
-    
+    for (int l = 0; l < p->n_layers; l++) {
+
         // attention rmsnorm
-        rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
+        rmsnorm(s->xb, x, w->rms_att_weight + l * dim, dim);
 
         // qkv matmuls for this position
-        matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
-        matmul(s->k, s->xb, w->wk + l*dim*dim, dim, dim);
-        matmul(s->v, s->xb, w->wv + l*dim*dim, dim, dim);
+        matmul(s->q, s->xb, w->wq + l * dim * dim, dim, dim);
+        matmul(s->k, s->xb, w->wk + l * dim * dim, dim, dim);
+        matmul(s->v, s->xb, w->wv + l * dim * dim, dim, dim);
 
         // apply RoPE rotation to the q and k vectors for each head
         for (int h = 0; h < p->n_heads; h++) {
             // get the q and k vectors for this head
-            float* q = s->q + h * head_size;
-            float* k = s->k + h * head_size;
+            float *q = s->q + h * head_size;
+            float *k = s->k + h * head_size;
             // rotate q and k by the freq_cis_real and freq_cis_imag
-            for (int i = 0; i < head_size; i+=2) {
+            for (int i = 0; i < head_size; i += 2) {
                 float q0 = q[i];
-                float q1 = q[i+1];
+                float q1 = q[i + 1];
                 float k0 = k[i];
-                float k1 = k[i+1];
-                float fcr = freq_cis_real_row[i/2];
-                float fci = freq_cis_imag_row[i/2];
-                q[i]   = q0 * fcr - q1 * fci;
-                q[i+1] = q0 * fci + q1 * fcr;
-                k[i]   = k0 * fcr - k1 * fci;
-                k[i+1] = k0 * fci + k1 * fcr;
+                float k1 = k[i + 1];
+                float fcr = freq_cis_real_row[i / 2];
+                float fci = freq_cis_imag_row[i / 2];
+                q[i] = q0 * fcr - q1 * fci;
+                q[i + 1] = q0 * fci + q1 * fcr;
+                k[i] = k0 * fcr - k1 * fci;
+                k[i + 1] = k0 * fci + k1 * fcr;
             }
         }
 
         // save key,value at this time step (pos) to our kv cache
-        int loff = l * p->seq_len * dim; // kv cache layer offset for convenience
-        float* key_cache_row = s->key_cache + loff + pos * dim;
-        float* value_cache_row = s->value_cache + loff + pos * dim;
+        int loff =
+            l * p->seq_len * dim; // kv cache layer offset for convenience
+        float *key_cache_row = s->key_cache + loff + pos * dim;
+        float *value_cache_row = s->value_cache + loff + pos * dim;
         copy(key_cache_row, s->k, dim);
         copy(value_cache_row, s->v, dim);
-        
+
         // multihead attention. iterate over all heads
         for (int h = 0; h < p->n_heads; h++) {
             // get the query vector for this head
-            float* q = s->q + h * head_size;
+            float *q = s->q + h * head_size;
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
                 // get the key vector for this head and at this timestep
-                float* k = s->key_cache + loff + t * dim + h * head_size;
+                float *k = s->key_cache + loff + t * dim + h * head_size;
                 // calculate the attention score as the dot product of q and k
                 float score = 0.0f;
                 for (int i = 0; i < head_size; i++) {
@@ -304,50 +314,53 @@ void transformer(int token, int pos, Config* p, RunState* s, TransformerWeights*
                 s->att[t] = score;
             }
 
-            // softmax the scores to get attention weights, from 0..pos inclusively
+            // softmax the scores to get attention weights, from 0..pos
+            // inclusively
             softmax(s->att, pos + 1);
-            
+
             // weighted sum of the values, store back into xb
             for (int i = 0; i < head_size; i++) {
                 float val = 0.0f;
                 for (int t = 0; t <= pos; t++) {
-                    val += s->att[t] * s->value_cache[loff + t * dim + h * head_size + i]; // note bad locality
+                    val += s->att[t] *
+                           s->value_cache[loff + t * dim + h * head_size +
+                                          i]; // note bad locality
                 }
                 s->xb[h * head_size + i] = val;
             }
         }
 
         // final matmul to get the output of the attention
-        matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+        matmul(s->xb2, s->xb, w->wo + l * dim * dim, dim, dim);
 
         // residual connection back into x
         accum(x, s->xb2, dim);
 
         // ffn rmsnorm
-        rmsnorm(s->xb, x, w->rms_ffn_weight + l*dim, dim);
+        rmsnorm(s->xb, x, w->rms_ffn_weight + l * dim, dim);
 
-        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-        // first calculate self.w1(x) and self.w3(x)
-        matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
-        matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
-        
+        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) *
+        // self.w3(x)) first calculate self.w1(x) and self.w3(x)
+        matmul(s->hb, s->xb, w->w1 + l * dim * hidden_dim, dim, hidden_dim);
+        matmul(s->hb2, s->xb, w->w3 + l * dim * hidden_dim, dim, hidden_dim);
+
         // F.silu; silu(x)=x*σ(x),where σ(x) is the logistic sigmoid
         for (int i = 0; i < hidden_dim; i++) {
             s->hb[i] = s->hb[i] * (1.0f / (1.0f + expf(-s->hb[i])));
         }
-        
+
         // elementwise multiply with w3(x)
         for (int i = 0; i < hidden_dim; i++) {
             s->hb[i] = s->hb[i] * s->hb2[i];
         }
 
         // final matmul to get the output of the ffn
-        matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
+        matmul(s->xb, s->hb, w->w2 + l * dim * hidden_dim, hidden_dim, dim);
 
         // residual connection
         accum(x, s->xb, dim);
     }
-    
+
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
 
@@ -355,7 +368,7 @@ void transformer(int token, int pos, Config* p, RunState* s, TransformerWeights*
     matmul(s->logits, x, w->token_embedding_table, p->dim, p->vocab_size);
 }
 
-int sample(float* probabilities, int n) {
+int sample(float *probabilities, int n) {
     // sample index from probabilities, they must sum to 1
     float r = (float)rand() / (float)RAND_MAX;
     float cdf = 0.0f;
@@ -368,7 +381,7 @@ int sample(float* probabilities, int n) {
     return n - 1; // in case of rounding errors
 }
 
-int argmax(float* v, int n) {
+int argmax(float *v, int n) {
     // return argmax of v in elements 0..n
     int max_i = 0;
     float max_p = v[0];
@@ -404,7 +417,7 @@ int main(int argc, char *argv[]) {
         unsigned int seed = atoi(argv[3]);
         srand(seed);
     } else {
-        time_t current_time; 
+        time_t current_time;
         time(&current_time);
         srand((unsigned int)current_time);
     }
@@ -438,15 +451,19 @@ int main(int argc, char *argv[]) {
         transformer(token, pos, &config, &state, &weights);
 
         // sample the next token
-        if(temperature == 0.0f) {
+        if (temperature == 0.0f) {
             // greedy argmax sampling
             next = argmax(state.logits, config.vocab_size);
         } else {
             // apply the temperature to the logits
-            for (int q=0; q<config.vocab_size; q++) { state.logits[q] /= temperature; }
-            // apply softmax to the logits to get the probabilities for next token
+            for (int q = 0; q < config.vocab_size; q++) {
+                state.logits[q] /= temperature;
+            }
+            // apply softmax to the logits to get the probabilities for next
+            // token
             softmax(state.logits, config.vocab_size);
-            // we now want to sample from this distribution to get the next token
+            // we now want to sample from this distribution to get the next
+            // token
             next = sample(state.logits, config.vocab_size);
         }
         printf("%d\n", next);
